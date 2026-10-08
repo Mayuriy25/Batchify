@@ -25,7 +25,8 @@ const Batch = require("./models/Batch");
 // Import batching service
 // Used to check whether orders can be batched.
 const {
-    canBatchOrders
+    canBatchOrders,
+    isBatchWindowExpired
 } = require("./Services/batchingService")
 
 const app = express();
@@ -54,32 +55,100 @@ app.post("/orders", async (req, res) => {
 
     await order.save();
 
-    // Find existing orders from MongoDB
+    // Find possible batching candidates
+    // We only consider orders from the same customer,
+    // same address, and orders that are not dispatched.
     const existingOrders = await Order.find({
+        customerId: order.customerId,
+        addressId: order.addressId,
+        status: { $ne: "dispatched" },
         _id: { $ne: order._id }
     });
 
     console.log(existingOrders);
-
-    res.json(order);
 
     // Find an available rider
     const rider = await Rider.findOne({
         status: "available"
     });
 
+    const batch = await Batch.findOne({
+        riderId: rider.riderId,
+        status: "pending"
+    });
+
+    const windowExpired = batch
+        ? isBatchWindowExpired(batch)
+        : false;
+
+    console.log("Batch window expired:", windowExpired);
+
+    console.log(
+        "Existing batch:",
+        batch ? batch.batchId : "No batch"
+    );
+    const currentOrderCount = batch
+        ? batch.orderIds.length
+        : 0;
+
+    console.log("Current order count:", currentOrderCount);
+
     console.log(rider);
 
     // Check whether the new order can be batched with an existing order
-    const canBatch = canBatchOrders(
-        order,
-        existingOrders[0],
-        rider,
-        0,
-        new Date(Date.now() + 30 * 60 * 1000)
-    );
+    let canBatch = false;
+
+    for (const existingOrder of existingOrders) {
+        const result = canBatchOrders(
+            order,
+            existingOrder,
+            rider,
+            currentOrderCount,
+            new Date(Date.now() + 30 * 60 * 1000)
+        );
+
+        console.log("Can batch with order", existingOrder.orderId, ":", result);
+
+        if (result && !windowExpired) {
+            canBatch = true;
+
+            // Add the new order to the existing batch
+            const updatedBatch = await Batch.findOneAndUpdate(
+                { batchId: batch.batchId },
+                { $push: { orderIds: order.orderId } },
+                { returnDocument: "after" }
+            );
+
+            console.log("Updated batch:", updatedBatch);
+
+            break;
+        }
+    }
+
 
     console.log("Can batch:", canBatch);
+
+    if (!canBatch) {
+
+        const newBatch = new Batch({
+            batchId: "B002",
+            orderIds: [order.orderId],
+            riderId: rider.riderId,
+            createdAt: new Date(),
+            status: "pending"
+        });
+
+        await newBatch.save();
+
+        // Update the order with the batch it belongs to
+        order.batchId = newBatch.batchId;
+        await order.save();
+
+        console.log("New batch created:", newBatch);
+        console.log("Updated order:", order);
+    }
+
+    res.json(order);
 });
 
 // Create a new address
@@ -134,6 +203,7 @@ app.post("/batches", async (req, res) => {
 
     res.json(batch);
 });
+
 
 mongoose.connect(process.env.MONGODB_URI)
     .then(() => {

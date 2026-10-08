@@ -18,6 +18,17 @@ function isWithinTimeWindow(order1, order2) {
     return timeDifference <= tenMinutes;
 }
 
+
+// Checks whether the batch's 10-minute batching window has expired.
+function isBatchWindowExpired(batch) {
+    const currentTime = new Date();
+
+    const timeDifference = currentTime - batch.createdAt;
+
+    const tenMinutes = 10 * 60 * 1000;
+
+    return timeDifference > tenMinutes;
+}
 // Checks whether a rider has space for one more order.
 function hasRiderCapacity(rider, currentOrderCount) {
     return currentOrderCount < rider.capacity;
@@ -57,6 +68,7 @@ function canBatchOrders(
 module.exports = {
     canCombineOrders,
     isWithinTimeWindow,
+    isBatchWindowExpired,
     canBeBatched,
     hasRiderCapacity,
     meetsSLA,
